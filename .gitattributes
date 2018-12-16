@@ -1,0 +1,4 @@
+*.pem filter=git-crypt diff=git-crypt
+*.key filter=git-crypt diff=git-crypt
+secrets/* filter=git-crypt diff=git-crypt
+machines/*.zip filter=git-crypt diff=git-crypt
