@@ -1,0 +1,64 @@
+version: '3.4'
+
+services:
+  traefik:
+    image: traefik:1.7.5-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    configs:
+        - source: traefik
+          target: /etc/traefik/traefik.toml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - jinx.pro.key
+      - jinx.pro.pem
+      - registry-htpasswd
+    networks:
+      - default
+    deploy:
+      labels:
+        - traefik.port=8080
+        - traefik.frontend.rule=Host:jinx.pro
+
+  registry:
+    image: registry:2
+    networks:
+      - default
+    volumes: 
+      - /var/lib/registry:/mnt/registry
+    secrets:
+      - registry-htpasswd
+    deploy:
+      labels:
+        - traefik.port=5000 # default port exposed by the registry
+        - traefik.frontend.rule=Host:registry.jinx.pro
+        - traefik.frontend.auth.basic.usersFile=/run/secrets/registry-htpasswd
+      placement:
+        constraints: [node.role == manager]
+    
+  www:
+    depends_on: [registry]
+    image: registry.jinx.pro/www:latest
+    deploy:
+      labels:
+        - traefik.port=80
+        - traefik.frontend.rule=Host:jinx.pro
+
+networks:
+  default:
+    driver: overlay
+
+configs:
+  traefik:
+    file: ./traefik.toml
+
+secrets:
+  jinx.pro.pem:
+    file: ./secrets/jinx.pro.pem
+  jinx.pro.key:
+    file: ./secrets/jinx.pro.key
+  registry-htpasswd:
+    file: ./secrets/registry-htpasswd
