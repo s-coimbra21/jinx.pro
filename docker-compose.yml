@@ -3,6 +3,7 @@ version: '3.4'
 services:
   traefik:
     image: traefik:1.7.5-alpine
+    command: --api
     ports:
       - "80:80"
       - "443:443"
@@ -21,14 +22,14 @@ services:
     deploy:
       labels:
         - traefik.port=8080
-        - traefik.frontend.rule=Host:jinx.pro
+        - traefik.frotend.rule=Host:traefik.jinx.pro
 
   registry:
     image: registry:2
     networks:
       - default
     volumes: 
-      - /var/lib/registry:/mnt/registry
+      - /var/lib/registry:/var/lib/registry
     secrets:
       - registry-htpasswd
     deploy:
@@ -38,14 +39,34 @@ services:
         - traefik.frontend.auth.basic.usersFile=/run/secrets/registry-htpasswd
       placement:
         constraints: [node.role == manager]
+
+  shepherd:
+    depends_on: [registry]
+    image: docker
+    entrypoint: /usr/local/bin/shepherd
+    configs:
+        - source: shepherd
+          target: /usr/local/bin/shepherd
+          mode: 0544
+    environment:
+      SLEEP_TIME: 600
+      WITH_REGISTRY_AUTH: "true"
+      BLACKLIST_SERVICES: "jinx_shepherd jinx_registry jinx_traefik"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.docker/config.json:/root/.docker/config.json
+    deploy:
+      placement:
+        constraints:
+        - node.role == manager
     
   www:
     depends_on: [registry]
-    image: registry.jinx.pro/www:latest
+    image: registry.jinx.pro/www
     deploy:
       labels:
         - traefik.port=80
-        - traefik.frontend.rule=Host:jinx.pro
+        - traefik.frontend.rule=Host:jinx.pro, www.jinx.pro
 
 networks:
   default:
@@ -54,6 +75,8 @@ networks:
 configs:
   traefik:
     file: ./traefik.toml
+  shepherd:
+    file: ./shepherd
 
 secrets:
   jinx.pro.pem:
