@@ -1,9 +1,14 @@
 version: '3.4'
 
 services:
+  ############################
+  ## Boilerplate Containers ##
+  ############################
+
+  # Load Balancer
   traefik:
     image: traefik:1.7.5-alpine
-    command: --api
+    command: --api # enable dashboard and metrics on traefik.jinx.pro:8080
     ports:
       - "80:80"
       - "443:443"
@@ -16,55 +21,73 @@ services:
     secrets:
       - jinx.pro.key
       - jinx.pro.pem
-      - registry-htpasswd
-    networks:
-      - default
+      - htpasswd # passwd file for http basic auth
     deploy:
       labels:
         - traefik.port=8080
         - traefik.frotend.rule=Host:traefik.jinx.pro
+        - traefik.frontend.auth.basic.usersFile=/run/secrets/htpasswd
 
+  # Private Docker Registry
   registry:
     image: registry:2
-    networks:
-      - default
     volumes: 
+      # persist the registry on the host's hard drive
+      # for a multi-host config, you will want to use
+      # some volume that is accessible on the network
+      # such as AWS S3 or DigitalOcean Block Storage
       - /var/lib/registry:/var/lib/registry
     secrets:
-      - registry-htpasswd
+      - htpasswd # passwd file for http basic auth
     deploy:
       labels:
         - traefik.port=5000 # default port exposed by the registry
         - traefik.frontend.rule=Host:registry.jinx.pro
-        - traefik.frontend.auth.basic.usersFile=/run/secrets/registry-htpasswd
+        - traefik.frontend.auth.basic.usersFile=/run/secrets/htpasswd
       placement:
         constraints: [node.role == manager]
 
+  # Container Auto Updater Watchdog
   shepherd:
-    depends_on: [registry]
+    depends_on: [registry] # make sure it doesn't start while the registry is down
     image: docker
     entrypoint: /usr/local/bin/shepherd
     configs:
+        # Because Shepherd is just a shell script with Docker
+        # as a dependency, we just use the 'docker' container
+        # and provide the script using the docker config API
         - source: shepherd
           target: /usr/local/bin/shepherd
-          mode: 0544
+          mode: 0544 # Make sure it is executable
     environment:
-      SLEEP_TIME: 600
-      WITH_REGISTRY_AUTH: "true"
-      BLACKLIST_SERVICES: "jinx_shepherd jinx_registry jinx_traefik"
+      SLEEP_TIME: 300 # check for new images every 5 minutes
+      WITH_REGISTRY_AUTH: "true" # use the private registry credentials stored on the host
+      BLACKLIST_SERVICES: "jinx_shepherd jinx_registry jinx_traefik" # no need to check for updates on non-app containers
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.docker/config.json:/root/.docker/config.json
+      - /var/run/docker.sock:/var/run/docker.sock # use the host machine's network
+      - /root/.docker/config.json:/root/.docker/config.json # this file is where the registry password is stored
     deploy:
       placement:
         constraints:
+        # Make sure it only runs on a manager node. Not actually required
+        # but then you would need to set up a swarm secret for the docker config.json
         - node.role == manager
     
+  ############################
+  ## Application Containers ##
+  ############################
+
+  # Main Webapp (Blog, Portfolio)
   www:
     depends_on: [registry]
     image: registry.jinx.pro/www
     deploy:
       labels:
+        # This image is based on nginx which listens on port 80 by default.
+        # We could set up TLS between the containers as well but that's a
+        # bit overkill because they aren't externally accessible. Also,
+        # the actual docker swarm nodes already communicate between them
+        # using TLS using the keys/certificates stored at ./docker/certs
         - traefik.port=80
         - traefik.frontend.rule=Host:jinx.pro, www.jinx.pro
 
@@ -76,12 +99,12 @@ configs:
   traefik:
     file: ./traefik.toml
   shepherd:
-    file: ./shepherd
+    file: ./services/shepherd
 
 secrets:
   jinx.pro.pem:
     file: ./secrets/jinx.pro.pem
   jinx.pro.key:
     file: ./secrets/jinx.pro.key
-  registry-htpasswd:
-    file: ./secrets/registry-htpasswd
+  htpasswd:
+    file: ./secrets/htpasswd
